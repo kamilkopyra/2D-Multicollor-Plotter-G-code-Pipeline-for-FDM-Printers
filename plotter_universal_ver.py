@@ -8,7 +8,7 @@ import argparse, re, sys, tempfile
 from pathlib import Path
 import numpy as np
 import vtracer
-from PIL import Image
+from PIL import Image, ImageDraw
 from sklearn.cluster import KMeans
 
 Z_UP_DEFAULT    = 5.0
@@ -24,6 +24,113 @@ PHOTO_Y_DEFAULT = 10.0
 PHOTO_WAIT_MS   = 5000
 
 
+# dodatkowa funkcjonalność : generator image -> ASCII
+#                            oraz      image -> Voronoi
+
+# ASCII mode
+# używam biblioteki Pillow i Numpy
+def apply_ascii(arr, chars=' .:-=+*#@$%^&?', cell = 4):
+    """Zamienia maskę PNG na reprezentację ASCII."""
+    H, W = arr.shape
+    img = Image.fromarray(arr)
+    draw = ImageDraw.Draw(img)
+    for y in range(0, H, cell):
+        for x in range(0, W, cell):
+            patch = arr[y:y+cell, x:x+cell]
+            brightness = patch.mean() / 255.0
+            ch = chars[int(brightness * (len(chars) - 1))]
+            if ch != ' ':
+                draw.text((x, y), ch, fill=0)
+    return np.array(img)
+
+# Voronoi mode
+# używam gotowej biblioteki Voronoi
+def apply_voronoi(arr, n_points = 10000):
+    """Rysuje diagram Voronoi z punktów maski."""
+    from scipy.spatial import Voronoi #importuję lokalnie, żeby nie było konfliktu jeśli ktoś nie używa
+    H, W = arr.shape
+    black = np.argwhere(arr < 128)
+    if len(black) < 4:
+        return arr
+    idx = np.random.choice(len(black), min(n_points, len(black)), replace=False)
+    pts = black[idx][:, ::-1].astype(float)  # (x, y)
+    corners = np.array([[0,0],[W,0],[0,H],[W,H]], dtype=float)
+    pts = np.vstack([pts, corners])
+    vor = Voronoi(pts)
+    out = Image.fromarray(np.full((H, W), 255, dtype=np.uint8))
+    draw = ImageDraw.Draw(out)
+    for ridge in vor.ridge_vertices:
+        if -1 in ridge:
+            continue
+        p1 = vor.vertices[ridge[0]]
+        p2 = vor.vertices[ridge[1]]
+        draw.line([(p1[0], p1[1]), (p2[0], p2[1])], fill=0, width=1)
+    return np.array(out)
+
+
+
+# Stippling - kropkowanie
+# używam biblioteki eighted-voronoi-stippling
+def apply_stippling(arr, n_points=2000, dot_radius=2):
+    """
+    Rozkłada kropki na obrazie — gęstość odpowiada ciemności obszaru.
+    Ciemne piksele = większa szansa na kropkę.
+    """
+    H, W = arr.shape
+
+    # prawdopodobieństwo = odwrotność jasności (ciemny = duże p)
+    prob = (255 - arr).astype(float)
+    prob /= prob.sum()
+
+    # losuj piksele z wagami
+    flat_idx = np.random.choice(H * W, size=n_points, replace=False, p=prob.ravel())
+    ys, xs = np.unravel_index(flat_idx, (H, W))
+
+    # rysuj kropki
+    out = Image.fromarray(np.full((H, W), 255, dtype=np.uint8))
+    draw = ImageDraw.Draw(out)
+    for x, y in zip(xs, ys):
+        draw.ellipse(
+            [(x - dot_radius, y - dot_radius),
+             (x + dot_radius, y + dot_radius)],
+            fill=0
+        )
+
+    return np.array(out)
+
+def apply_sketch(arr, blur=21, threshold1=30, threshold2=100):
+    """
+    Efekt szkicu ołówkowego przez detekcję krawędzi Canny (OpenCV).
+    blur       — rozmycie gaussowskie przed detekcją
+    threshold1 — dolny próg Canny
+    threshold2 — górny próg Canny
+    """
+    import cv2
+    blurred = cv2.GaussianBlur(arr, (blur, blur), 0)
+    edges = cv2.Canny(blurred, threshold1, threshold2)
+    return cv2.bitwise_not(edges) 
+
+
+def apply_mode(arr, mode, points, stippling_radius, sketch_blur, sketch_t1, sketch_t2):
+    if mode == 'ascii':
+        print(f"      tryb: ASCII ({points} pikseli na znak)")
+        return apply_ascii(arr, cell = points)
+    elif mode == 'voronoi':
+        print(f"      tryb: Voronoi ({points} punktów)")
+        return apply_voronoi(arr, n_points=points)
+    elif mode == 'stippling':
+        print(f"      tryb: Stippling ({points}) punktów")
+        return apply_stippling(arr, n_points=points, dot_radius=stippling_radius)
+    elif mode == 'sketch':
+        return apply_sketch(arr, sketch_blur, sketch_t1, sketch_t2)
+    return arr  
+
+
+
+
+
+
+
 # krok 1: rozdzielanie kolorów 
 # rozdzielam obraz na n części, dla każdej z nich
 # generowany będzie osobny gcode - niezbędne do obsługi
@@ -34,7 +141,7 @@ PHOTO_WAIT_MS   = 5000
 # - NumPy - operacje na tablicach pikseli
 # scikit-leart - algorytm K-means odpowiedzialny za rozdzielenie kolorów
 
-def split_colors(img_path, n_colors, tmp_dir, colors_dir):
+def split_colors(img_path, n_colors, tmp_dir, colors_dir, mode, points, stippling_radius, sketch_blur, sketch_t1, sketch_t2):
     print(f"\n[1/5] Rozdzielam kolory ({n_colors} klastrów)...")
 
     img = Image.open(img_path).convert('RGB')
@@ -58,6 +165,7 @@ def split_colors(img_path, n_colors, tmp_dir, colors_dir):
 
         arr = np.full((H, W), 255, dtype=np.uint8)
         arr[mask] = 0
+        arr = apply_mode(arr, mode, points, stippling_radius, sketch_blur, sketch_t1, sketch_t2)
 
         name = f"kolor_{i+1:02d}_{hex_col}.png"
 
@@ -77,11 +185,12 @@ def split_colors(img_path, n_colors, tmp_dir, colors_dir):
 
 # Biblioteka vtracker  
 
-def vectorize(png_path, svg_path):
+def vectorize(png_path, svg_path, mode='default'):
+    speckle = 1 if mode == 'sketch' or mode =='ascii' else 4
     vtracer.convert_image_to_svg_py(
         str(png_path), str(svg_path),
         colormode='binary',
-        filter_speckle=4,
+        filter_speckle=speckle,
         corner_threshold=60,
         length_threshold=4.0,
         path_precision=3,
@@ -319,6 +428,11 @@ def main():
     p.add_argument('--photo-x',      type=float, default=PHOTO_X_DEFAULT)
     p.add_argument('--photo-y',      type=float, default=PHOTO_Y_DEFAULT)
     p.add_argument('--photo-wait',   type=int,   default=PHOTO_WAIT_MS)
+    p.add_argument(
+        '--mode', 
+        choices=['default', 'ascii' , 'voronoi', 'stippling', 'sketch'],
+        default='default'
+    )
 
     p.add_argument(
         '--printer',
@@ -327,6 +441,15 @@ def main():
         help="Typ drukarki: marlin używa M0, bambu używa M400 U1 i header Bambu-like"
     )
 
+    p.add_argument('--mode_size', type=int, default=8,
+               help="Rozmiar kratki ASCII w px (domyślnie 8)" \
+               "Ilość kratek voronoi" \
+               "Ilość punktów stippling")
+
+    p.add_argument('--stippling_radius', type=int, default=2)
+    p.add_argument('--sketch_blur',   type=int, default=21)
+    p.add_argument('--sketch_t1',     type=int, default=30)
+    p.add_argument('--sketch_t2',     type=int, default=100)
     args = p.parse_args()
 
     paper = {'a4': (210, 297), 'a5': (148, 210), 'a3': (297, 420)}[args.paper]
@@ -344,7 +467,9 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
 
-        color_data, img_w, img_h = split_colors(args.input, args.colors, tmp_dir, colors_dir)
+        color_data, img_w, img_h = split_colors(args.input, args.colors, tmp_dir, colors_dir,
+                                                args.mode, args.mode_size, args.stippling_radius,
+                                                 args.sketch_blur, args.sketch_t1, args.sketch_t2 )
 
         print(f"\n[2/5] Wektoryzuję PNG → SVG...")
 
@@ -352,7 +477,7 @@ def main():
 
         for png_path, hex_col in color_data:
             svg_path = tmp_dir / png_path.with_suffix('.svg').name
-            vectorize(png_path, svg_path)
+            vectorize(png_path, svg_path, args.mode)
             svg_files.append(svg_path)
             print(f"    {png_path.name}")
 
