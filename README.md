@@ -47,7 +47,17 @@ python plotter_universal_ver.py  [options]
 | `stippling` | Weighted dot distribution by brightness |
 | `sketch` | Pencil sketch via Canny edge detection |
 
-## Example
+## Examples
+
+| Mode | Result |
+|------|--------|
+| sketch | ![sketch](images/lady_with_an_ermine_sketch.png) |
+| stippling | ![stippling](images/lady_with_an_ermine_stippling.png) |
+| voronoi | ![voronoi](images/lady_with_an_ermine_voronoi.png) |
+| ascii | ![ascii](images/lady_with_an_ermine_ascii.png) |
+
+
+## Example usage
 
 ```bash
 python plotter_universal_ver.py image.webp --printer bambu -n 4 --photo-x 200 --photo-y 10 --photo-wait 5000
