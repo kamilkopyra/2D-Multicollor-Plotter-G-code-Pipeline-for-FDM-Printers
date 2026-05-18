@@ -48,6 +48,7 @@ python plotter_universal_ver.py  [options]
 | `sketch` | Pencil sketch via Canny edge detection |
 
 ## Examples
+More examples can be found in the Images project folder
 
 | Mode | Result |
 |------|--------|
