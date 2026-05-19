@@ -2,6 +2,11 @@
 
 Python pipeline converting raster images into multicolor plotter G-code for FDM 3D printers.
 
+# Versions:
+- plotter_universal_ver.py - all in one version, image as input -> G_code ready to be uploaded to your printer on the output
+- external_gcode_ver.py - if you're using an external tool (ex. Inkscape), you can still upload your G_code to be filtered (add start and end sequence)
+- image_processor.py - if you only want to add an effect to your image this is the version for you, no G_code generating
+
 ## Note
 
 This is a university project. The pen change sequence assumes a camera trap mounted inside the printer chamber — when the printhead arrives at the designated position, it triggers a servo mechanism on the printhead to automatically swap the pen.
