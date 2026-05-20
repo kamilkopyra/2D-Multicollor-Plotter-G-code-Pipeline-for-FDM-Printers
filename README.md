@@ -67,6 +67,35 @@ More examples can be found in the Images project folder
 | ascii | ![ascii](images/lady_with_an_ermine_ascii.png) |
 
 
+
+## Image Processor Examples
+
+<table>
+  <tr>
+    <td><img src="image_processor_examples/Abbey-Road-666x670_ascii.png"/><br>Abbey Road — ascii</td>
+    <td><img src="image_processor_examples/Abbey-Road-666x670_sketch.png"/><br>Abbey Road — sketch</td>
+    <td><img src="image_processor_examples/Abbey-Road-666x670_voronoi.png"/><br>Abbey Road — voronoi</td>
+    <td><img src="image_processor_examples/Abbey-Road-666x670_stippling_color.png"/><br>Abbey Road — stippling_color</td>
+  </tr>
+  <tr>
+    <td><img src="image_processor_examples/ali_ascii.png"/><br>Ali — ascii</td>
+    <td><img src="image_processor_examples/ali_sketch.png"/><br>Ali — sketch</td>
+    <td><img src="image_processor_examples/ali_stippling.png"/><br>Ali — stippling</td>
+    <td><img src="image_processor_examples/ali_voronoi.png"/><br>Ali — voronoi</td>
+  </tr>
+  <tr>
+    <td><img src="image_processor_examples/astronaut_ascii.png"/><br>Astronaut — ascii</td>
+    <td><img src="image_processor_examples/astronaut_ascii_color.png"/><br>Astronaut — ascii_color</td>
+    <td><img src="image_processor_examples/astronaut_sketch.png"/><br>Astronaut — sketch</td>
+    <td><img src="image_processor_examples/astronaut_voronoi_color.png"/><br>Astronaut — voronoi_color</td>
+  </tr>
+  <tr>
+    <td><img src="image_processor_examples/starry_night_sketch_color.png"/><br>Starry Night — sketch_color</td>
+    <td><img src="image_processor_examples/zebra_ascii.png"/><br>Zebra — ascii</td>
+    <td><img src="image_processor_examples/ja_voronoi.png"/><br>Voronoi</td>
+    <td></td>
+  </tr>
+</table>
 ## Example usage
 
 ```bash
