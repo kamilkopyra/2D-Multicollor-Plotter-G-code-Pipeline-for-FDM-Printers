@@ -51,6 +51,10 @@ python plotter_universal_ver.py  [options]
 | `voronoi` | Voronoi diagram from mask points |
 | `stippling` | Weighted dot distribution by brightness |
 | `sketch` | Pencil sketch via Canny edge detection |
+| `ascii_color` | ASCII art representation in color - only in image_processor version |
+| `voronoi_color` | Voronoi diagram from mask points in color - only in image_processor version  |
+| `stippling_color` | Weighted dot distribution by brightness in color - only in image_processor version |
+| `sketch_color` | Pencil sketch via Canny edge detection in color - only in image_processor version |
 
 ## Examples
 More examples can be found in the Images project folder
