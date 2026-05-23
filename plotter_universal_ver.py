@@ -11,12 +11,12 @@ import vtracer
 from PIL import Image, ImageDraw
 from sklearn.cluster import KMeans
 
-Z_UP_DEFAULT    = 5.0
+Z_UP_DEFAULT    = 23.0
 # defaultowe ustawienia prędkości
 FEEDRATE_DRAW   = 3000
-FEEDRATE_TRAVEL = 8000
-FEEDRATE_Z      = 1000
-
+FEEDRATE_TRAVEL = 15000
+FEEDRATE_Z      = 5000
+MIN_LIFT_DISTANCE = 5.0 # mm; krótsze G0 nie podnoszą pisaka
 
 # ustawienia położenia fotoklatki
 PHOTO_X_DEFAULT = 10.0
@@ -29,19 +29,32 @@ PHOTO_WAIT_MS   = 5000
 
 # ASCII mode
 # używam biblioteki Pillow i Numpy
-def apply_ascii(arr, chars=' .:-=+*#@$%^&?', cell = 4):
-    """Zamienia maskę PNG na reprezentację ASCII."""
+def apply_ascii(arr, chars=' .:-=+*#@$%^&?', cell=12):
+    """ASCII art — jasność kratki → znak, z większym fontem."""
+    from PIL import ImageFont
+
     H, W = arr.shape
-    img = Image.fromarray(arr)
+    img = Image.fromarray(np.full(arr.shape, 255, dtype=np.uint8))
     draw = ImageDraw.Draw(img)
+
+    
+    font_size = cell*2
+    try:
+        font = ImageFont.truetype("C:/Windows/Fonts/consola.ttf", font_size)
+    except:
+        font = ImageFont.load_default()
+
     for y in range(0, H, cell):
         for x in range(0, W, cell):
             patch = arr[y:y+cell, x:x+cell]
             brightness = patch.mean() / 255.0
             ch = chars[int(brightness * (len(chars) - 1))]
+
             if ch != ' ':
-                draw.text((x, y), ch, fill=0)
+                draw.text((x, y), ch, fill=0, font=font)
+
     return np.array(img)
+
 
 # Voronoi mode
 # używam gotowej biblioteki Voronoi
@@ -147,6 +160,24 @@ def split_colors(img_path, n_colors, tmp_dir, colors_dir, mode, points, stipplin
     img = Image.open(img_path).convert('RGB')
     W, H = img.size
 
+    if n_colors == 1:
+        gray = img.convert('L')
+        arr = np.array(gray)
+
+        arr = np.where(arr < 180, 0, 255).astype(np.uint8)
+
+        arr = apply_mode(arr, mode, points, stippling_radius, sketch_blur, sketch_t1, sketch_t2)
+
+        name = "kolor_01_000000.png"
+
+        img_out = Image.fromarray(arr, mode='L')
+        img_out.save(tmp_dir / name)
+        img_out.save(colors_dir / name)
+
+        print(f"    kolor 1: #000000  → {colors_dir/name}")
+
+        return [(tmp_dir / name, "#000000")], W, H
+
     pixels = np.array(img).reshape(-1, 3).astype(float)
 
     km = KMeans(n_clusters=n_colors, random_state=42, n_init='auto')
@@ -179,6 +210,43 @@ def split_colors(img_path, n_colors, tmp_dir, colors_dir, mode, points, stipplin
 
     return results, W, H
 
+def lineart_png_to_svg(png_path, svg_path):
+    import cv2
+
+    img = Image.open(png_path).convert('L')
+    arr = np.array(img)
+    H, W = arr.shape
+
+    # czarne linie na białym tle -> białe linie na czarnym tle dla cv2.findContours
+    binary = np.where(arr < 128, 255, 0).astype(np.uint8)
+
+    contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+    svg_lines = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">'
+    ]
+
+    for cnt in contours:
+        pts = cnt.reshape(-1, 2)
+
+        if len(pts) < 3:
+            continue
+
+        # lekkie uproszczenie, żeby nie było miliona punktów
+        epsilon = 0.8
+        approx = cv2.approxPolyDP(cnt, epsilon, False)
+        pts = approx.reshape(-1, 2)
+
+        points = " ".join(f"{x},{y}" for x, y in pts)
+
+        svg_lines.append(
+            f'<polyline points="{points}" fill="none" stroke="black" stroke-width="1"/>'
+        )
+
+    svg_lines.append("</svg>")
+
+    svg_path.write_text("\n".join(svg_lines), encoding="utf-8")
+
 
 #  krok 2: wektoryzacja
 #  przekonwertowanie obrazu na plik svg
@@ -186,16 +254,20 @@ def split_colors(img_path, n_colors, tmp_dir, colors_dir, mode, points, stipplin
 # Biblioteka vtracker  
 
 def vectorize(png_path, svg_path, mode='default'):
-    speckle = 1 if mode == 'sketch' or mode =='ascii' else 4
+    if mode in ['sketch', 'ascii', 'stippling', 'voronoi']:
+        lineart_png_to_svg(png_path, svg_path)
+        return
+
+    speckle = 4 if mode == 'ascii' else 20
+
     vtracer.convert_image_to_svg_py(
         str(png_path), str(svg_path),
         colormode='binary',
         filter_speckle=speckle,
         corner_threshold=60,
-        length_threshold=4.0,
+        length_threshold=8.0,
         path_precision=3,
     )
-
 
 # krok 3: SVG -> raw G-code
 # biblioteka vpype
@@ -258,49 +330,81 @@ RE_F      = re.compile(r'\bF[\d.]+', re.I)
 def filter_gcode(lines, z_up):
     out = []
 
+    RE_X = re.compile(r'\bX(-?[\d.]+)', re.I)
+    RE_Y = re.compile(r'\bY(-?[\d.]+)', re.I)
+    RE_Z_ANY = re.compile(r'\bZ-?[\d.]+\s*', re.I)
+
+    pisak_na_dole = False
+    last_x = None
+    last_y = None
+
+    def get_xy(s):
+        mx = RE_X.search(s)
+        my = RE_Y.search(s)
+        x = float(mx.group(1)) if mx else last_x
+        y = float(my.group(1)) if my else last_y
+        return x, y
+
     for line in lines:
         s = line.strip()
 
         if not s or s.startswith(';'):
-            out.append(line)
             continue
 
         if RE_HEAT.match(s) or RE_FAN.match(s) or RE_G28.match(s) or RE_E_ONLY.match(s):
             continue
 
-        zm = RE_Z_MOVE.match(s)
+        clean = RE_E_AXIS.sub('', s)
+        clean = RE_Z_ANY.sub('', clean)
+        clean = RE_F.sub('', clean).strip()
 
-        if zm:
-            cmd  = zm.group(1).upper()
-            pre  = RE_F.sub('', zm.group(2)).strip()
-            zval = float(zm.group(3))
-            post = RE_F.sub('', zm.group(4)).strip()
+        mx = RE_X.search(clean)
+        my = RE_Y.search(clean)
+        has_xy = mx is not None or my is not None
 
-            if zval <= z_up * 0.5:
-                nz, feed, cmt = 0.0, FEEDRATE_DRAW, "; piszak W DOL"
+        is_g0 = clean.upper().startswith('G00') or clean.upper().startswith('G0 ')
+        is_g1 = clean.upper().startswith('G01') or clean.upper().startswith('G1 ')
+
+        if is_g0 and has_xy:
+            new_x, new_y = get_xy(clean)
+
+            dist = 999999.0
+            if last_x is not None and last_y is not None and new_x is not None and new_y is not None:
+                dist = ((new_x - last_x) ** 2 + (new_y - last_y) ** 2) ** 0.5
+
+            if pisak_na_dole and dist >= MIN_LIFT_DISTANCE:
+                out.append(f"G0 Z{z_up:.2f} F{FEEDRATE_Z} ; pisak w gore")
+                pisak_na_dole = False
+
+            # jeśli pisak jest na dole i G0 jest krótki, zamieniamy go na G1,
+            # żeby nie robić jałowego przejazdu z podnoszeniem
+            if pisak_na_dole and dist < MIN_LIFT_DISTANCE:
+                clean = re.sub(r'^\s*G0?0\b|^\s*G0\b', 'G1', clean, flags=re.I)
+                out.append(clean + f" F{FEEDRATE_DRAW}")
             else:
-                nz, feed, cmt = z_up, FEEDRATE_TRAVEL, "; piszak w gore"
+                out.append(clean + f" F{FEEDRATE_TRAVEL}")
 
-            parts = [cmd, f"Z{nz:.2f}", f"F{feed}"]
-
-            if pre:
-                parts.append(pre)
-
-            if post:
-                parts.append(post)
-
-            parts.append(cmt)
-            out.append(' '.join(parts))
+            last_x, last_y = new_x, new_y
             continue
 
-        if RE_E_AXIS.search(s):
-            out.append(RE_E_AXIS.sub('', s).strip())
+        if is_g1 and has_xy:
+            new_x, new_y = get_xy(clean)
+
+            if not pisak_na_dole:
+                out.append(f"G0 Z0.00 F{FEEDRATE_Z} ; pisak W DOL")
+                pisak_na_dole = True
+
+            out.append(clean + f" F{FEEDRATE_DRAW}")
+
+            last_x, last_y = new_x, new_y
             continue
 
-        out.append(line)
+        out.append(clean)
+
+    if pisak_na_dole:
+        out.append(f"G0 Z{z_up:.2f} F{FEEDRATE_Z} ; pisak w gore")
 
     return out
-
 
 # dla bambu ponoć M0 nie działa
 def pause_cmd(printer, msg):
@@ -350,16 +454,16 @@ def start_seq(z_up, first_color, printer):
         ]
 
     return header + [
-        "G28",
-        "M420 S0",
-        f"G0 Z{z_up:.2f} F{FEEDRATE_Z}",
+        "G28 X Y",     # homing TYLKO XY — Z nie ruszamy bo pisak jest dłuższy niż sonda
         f"G0 X50 Y50 F{FEEDRATE_TRAVEL}",
+        "M84",      
         "",
-        f"; PAUZA — wloz pisak {first_color}, opusc Z az dotknie papieru",
-        pause_cmd(printer, "Wloz pisak i ustaw Z, wznow z ekranu"),
-        "",
-        "G92 Z0",
+        "M0 Opusc Z az pisak dotknie papieru",
+        "G92 Z0",      # ta pozycja = zero
+        "G0 Z30 F1000",
+        "G28 X Y",
         f"G0 Z{z_up:.2f} F{FEEDRATE_Z}",
+
         "",
         "; ─── START ──────────────────────────",
         "",
